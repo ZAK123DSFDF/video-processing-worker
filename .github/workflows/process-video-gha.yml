@@ -1,0 +1,89 @@
+name: Process Video
+
+on:
+  repository_dispatch:
+    types: [process_video]
+
+jobs:
+  prepare-chunks:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.probe.outputs.matrix }}
+      hasAudio: ${{ steps.probe.outputs.hasAudio }}
+      duration: ${{ steps.probe.outputs.duration }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pnpm install --frozen-lockfile
+      - id: probe
+        run: pnpm exec tsx scripts/gha/probe.ts
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.videoId }}
+          R2_KEY: ${{ github.event.client_payload.r2Key }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  encode-chunks:
+    needs: prepare-chunks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        chunk: ${{ fromJSON(needs.prepare-chunks.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/gha/encode-chunk.ts
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.videoId }}
+          R2_KEY: ${{ github.event.client_payload.r2Key }}
+          CHUNK_INDEX: ${{ matrix.chunk.chunkIndex }}
+          START_SECONDS: ${{ matrix.chunk.startSeconds }}
+          DURATION_SECONDS: ${{ matrix.chunk.durationSeconds }}
+          HAS_AUDIO: ${{ needs.prepare-chunks.outputs.hasAudio }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  publish-manifest:
+    needs: [prepare-chunks, encode-chunks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/gha/publish.ts
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.videoId }}
+          R2_KEY: ${{ github.event.client_payload.r2Key }}
+          DURATION: ${{ needs.prepare-chunks.outputs.duration }}
+          HAS_AUDIO: ${{ needs.prepare-chunks.outputs.hasAudio }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_PUBLIC_CUSTOM_DOMAIN: ${{ secrets.R2_PUBLIC_CUSTOM_DOMAIN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
