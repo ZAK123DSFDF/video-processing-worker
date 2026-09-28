@@ -1,6 +1,7 @@
-import { open, readFile, stat } from "node:fs/promises"
+// scripts/gha/upload-youtube.ts
+import { open, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { eq } from "drizzle-orm"
 import { db, client } from "./db"
 import { videoJobs } from "#/db/course-schema"
@@ -10,8 +11,10 @@ const title = process.env.YT_TITLE || "Merged Course Video"
 const description = process.env.YT_DESCRIPTION || ""
 
 // Must be a multiple of 256KB for YouTube's resumable protocol.
-const CHUNK_SIZE = 8 * 1024 * 1024
+const CHUNK_SIZE = 32 * 1024 * 1024
 const MAX_CHUNK_ATTEMPTS = 4
+
+const pointerPath = join(tmpdir(), `merge-${jobId}-final-path.txt`)
 
 async function updateProgress(progress: number, step: string) {
 	try {
@@ -21,6 +24,19 @@ async function updateProgress(progress: number, step: string) {
 			.where(eq(videoJobs.id, jobId))
 	} catch (err) {
 		console.warn(`[DB Progress Update Warning]: ${err}`)
+	}
+}
+
+/** Removes the merge working dir (which holds final.mp4) and the pointer file. */
+async function cleanup(finalPath?: string) {
+	try {
+		if (finalPath) {
+			await rm(dirname(finalPath), { recursive: true, force: true })
+		}
+		await rm(pointerPath, { force: true })
+		console.log("Temp files cleaned up.")
+	} catch (err) {
+		console.warn(`[Cleanup Warning]: ${err}`)
 	}
 }
 
@@ -63,11 +79,7 @@ async function queryUploadedBytes(
 	throw new Error(`Could not query upload status: HTTP ${res.status}`)
 }
 
-async function main() {
-	const finalPath = (
-		await readFile(join(tmpdir(), `merge-${jobId}-final-path.txt`), "utf-8")
-	).trim()
-
+async function upload(finalPath: string) {
 	const fileSize = (await stat(finalPath)).size
 	const accessToken = await getAccessToken()
 
@@ -189,6 +201,16 @@ async function main() {
 		.where(eq(videoJobs.id, jobId))
 
 	console.log(`Job ${jobId} complete. YouTube video: https://youtu.be/${videoId}`)
+}
+
+async function main() {
+	const finalPath = (await readFile(pointerPath, "utf-8")).trim()
+	try {
+		await upload(finalPath)
+	} finally {
+		// Runs on success AND failure so no multi-GB file is left behind.
+		await cleanup(finalPath)
+	}
 }
 
 main()

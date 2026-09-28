@@ -1,4 +1,5 @@
-import { mkdir, rm, writeFile } from "node:fs/promises"
+// scripts/gha/concat-videos.ts
+import { mkdir, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { eq } from "drizzle-orm"
@@ -12,6 +13,9 @@ const videos: { id: string; manifestUrl: string; position: number }[] =
 	JSON.parse(process.env.VIDEOS_JSON!)
 
 const DOWNLOAD_CONCURRENCY = 16
+
+const outDir = join(tmpdir(), `merge-${jobId}`)
+const pointerPath = join(tmpdir(), `merge-${jobId}-final-path.txt`)
 
 async function listObjectKeys(prefix: string): Promise<string[]> {
 	const aws = getR2Client()
@@ -61,6 +65,15 @@ async function updateProgress(progress: number, step: string) {
 			.where(eq(videoJobs.id, jobId))
 	} catch (err) {
 		console.warn(`[DB Progress Update Warning]: ${err}`)
+	}
+}
+
+async function cleanup() {
+	try {
+		await rm(outDir, { recursive: true, force: true })
+		await rm(pointerPath, { force: true })
+	} catch (err) {
+		console.warn(`[Cleanup Warning]: ${err}`)
 	}
 }
 
@@ -153,11 +166,7 @@ async function buildPartMp4(
 	await run("ffmpeg", args, 60 * 60 * 1000)
 }
 
-async function main() {
-	const outDir = join(tmpdir(), `merge-${jobId}`)
-	await rm(outDir, { recursive: true, force: true })
-	await mkdir(outDir, { recursive: true })
-
+async function merge() {
 	const partPaths: string[] = []
 
 	for (let i = 0; i < videos.length; i++) {
@@ -191,27 +200,47 @@ async function main() {
 
 	await updateProgress(60, "Merging into a single file")
 
-	const listFile = join(outDir, "concat_list.txt")
-	await writeFile(listFile, partPaths.map((p) => `file '${p}'`).join("\n"))
-
 	const finalPath = join(outDir, "final.mp4")
-	await run(
-		"ffmpeg",
-		[
-			"-hide_banner", "-loglevel", "error", "-y",
-			"-f", "concat", "-safe", "0", "-i", listFile,
-			"-c", "copy",
-			"-movflags", "+faststart",
-			finalPath,
-		],
-		60 * 60 * 1000,
-	)
 
-	await Promise.all(partPaths.map((p) => rm(p, { force: true })))
+	if (partPaths.length === 1) {
+		// Single video: no need to re-copy the whole file, just rename it.
+		await rename(partPaths[0], finalPath)
+	} else {
+		const listFile = join(outDir, "concat_list.txt")
+		await writeFile(listFile, partPaths.map((p) => `file '${p}'`).join("\n"))
+
+		await run(
+			"ffmpeg",
+			[
+				"-hide_banner", "-loglevel", "error", "-y",
+				"-f", "concat", "-safe", "0", "-i", listFile,
+				"-c", "copy",
+				"-movflags", "+faststart",
+				finalPath,
+			],
+			60 * 60 * 1000,
+		)
+
+		await Promise.all(partPaths.map((p) => rm(p, { force: true })))
+	}
 
 	await updateProgress(70, "Merge complete, preparing YouTube upload")
-	await writeFile(join(tmpdir(), `merge-${jobId}-final-path.txt`), finalPath)
+	await writeFile(pointerPath, finalPath)
 	console.log(`Final merged file ready: ${finalPath}`)
+}
+
+async function main() {
+	// Clean BEFORE: remove any stale dir or pointer from an earlier run.
+	await cleanup()
+	await mkdir(outDir, { recursive: true })
+
+	try {
+		await merge()
+	} catch (err) {
+		// Clean on failure so a half-built merge never lingers.
+		await cleanup()
+		throw err
+	}
 }
 
 main()

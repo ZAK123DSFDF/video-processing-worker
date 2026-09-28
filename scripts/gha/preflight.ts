@@ -1,3 +1,4 @@
+// scripts/gha/preflight.ts
 import { db, client } from "./db"
 import { courseVideo, videoJobs } from "#/db/course-schema"
 

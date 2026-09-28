@@ -1,3 +1,4 @@
+// scripts/gha/fetch-merge-job.ts
 import { appendFileSync } from "node:fs"
 import { inArray, asc, eq } from "drizzle-orm"
 import { db, client } from "./db"

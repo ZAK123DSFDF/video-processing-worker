@@ -1,3 +1,4 @@
+// scripts/gha/encode-chunk.ts
 import { mkdir, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import {  join } from "node:path"

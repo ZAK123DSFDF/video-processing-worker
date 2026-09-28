@@ -1,3 +1,4 @@
+// scripts/gha/probe.ts
 import { appendFileSync } from "node:fs"
 import { getR2Client, getR2BucketUrl } from "#/lib/r2"
 import { CHUNK_SECONDS, run } from "#/trigger/video-shared"

@@ -1,3 +1,4 @@
+// scripts/gha/fail-merge-job.ts
 import { and, eq, ne } from "drizzle-orm"
 import { db, client } from "./db"
 import { videoJobs } from "#/db/course-schema"

@@ -1,3 +1,4 @@
+// scripts/gha/publish.ts
 import { eq } from "drizzle-orm"
 import { db, client } from "./db"
 import { courseVideo } from "#/db/course-schema"
