@@ -20,8 +20,14 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pnpm install --frozen-lockfile
+
+      - name: DB schema preflight
+        run: pnpm exec tsx scripts/gha/preflight.ts
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.videoId }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - id: probe
         run: pnpm exec tsx scripts/gha/probe.ts
         env:

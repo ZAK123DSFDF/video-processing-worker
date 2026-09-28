@@ -1,0 +1,61 @@
+name: Merge & Upload to YouTube
+
+on:
+  repository_dispatch:
+    types: [merge_upload_youtube]
+
+jobs:
+  merge-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: DB schema preflight
+        run: pnpm exec tsx scripts/gha/preflight.ts
+        env:
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Fetch job + ordered videos from DB
+        id: job
+        run: pnpm exec tsx scripts/gha/fetch-merge-job.ts
+        env:
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Concatenate videos in position order
+        run: pnpm exec tsx scripts/gha/concat-videos.ts
+        env:
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          VIDEOS_JSON: ${{ steps.job.outputs.videosJson }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Upload merged file to YouTube
+        run: pnpm exec tsx scripts/gha/upload-youtube.ts
+        env:
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          YT_TITLE: ${{ steps.job.outputs.title }}
+          YT_DESCRIPTION: ${{ steps.job.outputs.description }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Mark job failed on any error
+        if: failure()
+        run: pnpm exec tsx scripts/gha/fail-merge-job.ts
+        env:
+          JOB_ID: ${{ github.event.client_payload.jobId }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
