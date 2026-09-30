@@ -62,6 +62,22 @@ async function listObjectKeys(prefix: string): Promise<string[]> {
 
 	return Array.from(xml.matchAll(/<Key>([^<]+)<\/Key>/g), (m) => m[1])
 }
+async function readMeta(): Promise<Record<string, unknown>> {
+	const aws = getR2Client()
+	const res = await aws.fetch(getR2BucketUrl(`processed/${videoId}/meta.json`))
+	if (!res.ok) return {}
+	try {
+		return JSON.parse(await res.text())
+	} catch {
+		return {}
+	}
+}
+
+async function objectExists(key: string) {
+	const aws = getR2Client()
+	const res = await aws.fetch(getR2BucketUrl(key), { method: "HEAD" })
+	return res.ok
+}
 
 async function main() {
 	const aws = getR2Client()
@@ -138,12 +154,33 @@ async function main() {
 		? rawDomain.replace(/\/$/, "")
 		: `https://${rawDomain.replace(/\/$/, "")}`
 	const manifestUrl = `${domain}/processed/${videoId}/master.m3u8`
+	const thumbnailKey = `processed/${videoId}/thumbnail.jpg`
+	const hasThumbnail = await objectExists(thumbnailKey)
+	const thumbnailUrl = hasThumbnail ? `${domain}/${thumbnailKey}` : null
 
+	// Merge into the existing meta.json so title and originalKey are kept
+	const existingMeta = await readMeta()
+	const metaRes = await aws.fetch(
+		getR2BucketUrl(`processed/${videoId}/meta.json`),
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				...existingMeta,
+				duration: Math.round(duration),
+				...(thumbnailUrl ? { thumbnailUrl } : {}),
+			}),
+		},
+	)
+	if (!metaRes.ok) {
+		console.error(`meta.json update failed: HTTP ${metaRes.status}`)
+	}
 	await db
 		.update(courseVideo)
 		.set({
 			videoUrl: manifestUrl,
 			duration: Math.round(duration),
+			...(thumbnailUrl ? { thumbnailUrl } : {}),
 			processingStatus: "ready",
 			updatedAt: new Date(),
 		})

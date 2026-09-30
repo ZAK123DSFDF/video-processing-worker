@@ -2,7 +2,9 @@
 import { appendFileSync } from "node:fs"
 import { getR2Client, getR2BucketUrl } from "#/lib/r2"
 import { CHUNK_SECONDS, run } from "#/trigger/video-shared"
-
+import { mkdir, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const r2Key = process.env.R2_KEY
 
@@ -15,6 +17,51 @@ function setGithubOutput(key: string, value: string | boolean | number) {
 	if (outputFile) {
 		appendFileSync(outputFile, `${key}=${value}\n`)
 	}
+}
+async function uploadThumbnail(signedUrl: string, duration: number) {
+	const videoId = process.env.VIDEO_ID
+	if (!videoId) return
+
+	const workDir = join(tmpdir(), `${videoId}-thumb`)
+	await rm(workDir, { recursive: true, force: true })
+	await mkdir(workDir, { recursive: true })
+	const file = join(workDir, "thumbnail.jpg")
+
+	// A frame ~10% in (max 10s) usually avoids black intro frames
+	const at = Math.min(duration * 0.1, 10)
+
+	await run("ffmpeg", [
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-nostdin",
+		"-ss",
+		String(at),
+		"-i",
+		signedUrl,
+		"-frames:v",
+		"1",
+		"-vf",
+		"scale=1280:-2",
+		"-q:v",
+		"3",
+		"-y",
+		file,
+	])
+
+	const aws = getR2Client()
+	const res = await aws.fetch(
+		getR2BucketUrl(`processed/${videoId}/thumbnail.jpg`),
+		{
+			method: "PUT",
+			headers: {
+				"Content-Type": "image/jpeg",
+				"Cache-Control": "public, max-age=31536000, immutable",
+			},
+			body: await readFile(file),
+		},
+	)
+	if (!res.ok) throw new Error(`Thumbnail upload failed: HTTP ${res.status}`)
 }
 
 async function main() {
@@ -62,7 +109,12 @@ async function main() {
 
 	setGithubOutput("matrix", JSON.stringify(chunks))
 	setGithubOutput("hasAudio", hasAudio)
-	setGithubOutput("duration", duration)
+  setGithubOutput("duration", duration)
+  try {
+		await uploadThumbnail(signedReq.url.toString(), duration)
+	} catch (err) {
+		console.error("Thumbnail generation failed (non-fatal):", err)
+	}
 }
 
 main().catch((err) => {
